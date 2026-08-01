@@ -1,0 +1,9 @@
+node_modules
+.output
+.wxt
+stats.html
+stats-*.json
+*.local
+.DS_Store
+web-ext.config.ts
+.idea
