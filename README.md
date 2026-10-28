@@ -81,13 +81,15 @@ you explicitly start the picker, and requests the minimum permissions: `activeTa
 Built with [WXT](https://wxt.dev) and TypeScript.
 
 ```bash
-npm install
-npm run dev            # Chrome, with hot reload
-npm run dev:firefox    # Firefox
-npm run build          # production build → .output/chrome-mv3
-npm run zip            # packaged zip for the store
-npm run compile        # type-check only
+bun install
+bun run dev            # Chrome, with hot reload
+bun run dev:firefox    # Firefox
+bun run build          # production build → .output/chrome-mv3
+bun run zip            # packaged zip for the store
+bun run compile        # type-check only
 ```
+
+Installs ignore package versions published in the last 7 days, including transitive dependencies (`bunfig.toml`).
 
 To load a build manually: `chrome://extensions` → enable **Developer mode** → **Load unpacked** →
 select `.output/chrome-mv3`.

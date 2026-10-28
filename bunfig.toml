@@ -1,0 +1,4 @@
+[install]
+# Supply-chain cooldown: never resolve a version published in the last 7 days.
+# Applies to direct and transitive dependencies. Exact versions already in bun.lock are left as-is.
+minimumReleaseAge = 604800
