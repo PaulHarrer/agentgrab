@@ -254,6 +254,13 @@ export const PICKER_STYLES = /* css */ `
   pointer-events: none;
 }
 
+/* Ancestor fills, scaled with the clone. Clipped to the element's box so a
+ * parent gradient shows the slice that actually sits behind it. */
+.preview-backdrop {
+  overflow: hidden;
+  z-index: 0;
+}
+
 .meta {
   display: flex;
   flex-direction: column;

@@ -27,7 +27,7 @@ const POPOVER_HTML = /* html */ `
   </button>
   <span class="pop-title" data-ref="target"></span>
   <button type="button" class="icon-btn" data-ref="close" title="Close (Esc)" aria-label="Close">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
   </button>
 </div>
 <div class="stage" data-ref="stage"></div>
@@ -85,6 +85,8 @@ const CLONE_PROPS = [
   'background-size',
   'background-position',
   'background-repeat',
+  'background-origin',
+  'background-clip',
   'font-family',
   'font-size',
   'font-weight',
@@ -697,11 +699,12 @@ export class ElementPicker {
         if (css) el.setAttribute('style', existing + css);
       }
 
-      // Force the root to behave inside the stage.
+      // Force the root to behave inside the stage. z-index keeps it above the
+      // backdrop; a copied negative z-index would otherwise hide the element.
       const root = clone as HTMLElement;
       root.setAttribute(
         'style',
-        `${root.getAttribute('style') ?? ''}position: relative; margin: 0; max-width: none; animation: none; transition: none; box-sizing: border-box; `,
+        `${root.getAttribute('style') ?? ''}position: relative; z-index: 1; margin: 0; max-width: none; animation: none; transition: none; box-sizing: border-box; `,
       );
 
       const rect = source.getBoundingClientRect();
@@ -710,6 +713,8 @@ export class ElementPicker {
 
       const fit = document.createElement('div');
       fit.className = 'preview-fit';
+      const backdrop = buildPreviewBackdrop(source, width, height);
+      if (backdrop) fit.append(backdrop);
       fit.append(clone);
       stage.textContent = '';
       stage.append(fit);
@@ -724,6 +729,7 @@ export class ElementPicker {
         root.style.width = `${width}px`;
         root.style.height = `${height}px`;
         root.style.transform = `scale(${scale})`;
+        if (backdrop) backdrop.style.transform = `scale(${scale})`;
       });
     } catch {
       // On any failure, keep the empty checkerboard rather than breaking the popover.
@@ -789,6 +795,150 @@ export class ElementPicker {
   private finish(): void {
     this.teardown();
     this.onEnded?.();
+  }
+}
+
+/**
+ * Paint what shows through a transparent element. The clone only has its own
+ * background, so without this a heading on a colored card sits on the
+ * checkerboard instead of the color you see on the page.
+ *
+ * Layers are sized to each ancestor and clipped to the element's border box,
+ * so a parent gradient shows the slice behind the element rather than being
+ * stretched over it. The page canvas is the bottom layer when no ancestor
+ * is opaque.
+ */
+function buildPreviewBackdrop(source: Element, width: number, height: number): HTMLElement | null {
+  const sourceRect = source.getBoundingClientRect();
+  const layers: HTMLElement[] = [];
+  let opaque = false;
+  let node = parentAcrossShadow(source);
+  let guard = 0;
+
+  while (node && guard++ < 40 && !opaque) {
+    if (node.hasAttribute('data-agentgrab')) break;
+
+    const computed = window.getComputedStyle(node);
+    // `background-clip: text` paints the glyphs, not the box behind children.
+    const paints =
+      computed.display !== 'contents' &&
+      computed.visibility !== 'hidden' &&
+      computed.backgroundClip.trim() !== 'text';
+    if (paints) {
+      const color = computed.backgroundColor.trim();
+      const image = computed.backgroundImage.trim();
+      const alpha = colorAlpha(color);
+      const hasImage = image !== '' && image !== 'none';
+      const hasColor = alpha === null ? color !== '' && color !== 'transparent' : alpha > 0.001;
+      const rect = node.getBoundingClientRect();
+      const covers =
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.right > sourceRect.left &&
+        rect.left < sourceRect.right &&
+        rect.bottom > sourceRect.top &&
+        rect.top < sourceRect.bottom;
+      // Overflow and negative margins can stick out of a parent. A partial
+      // overlap is not a full cover, so keep walking for the rest of the box.
+      const fullyCovers =
+        rect.left <= sourceRect.left + 0.5 &&
+        rect.top <= sourceRect.top + 0.5 &&
+        rect.right >= sourceRect.right - 0.5 &&
+        rect.bottom >= sourceRect.bottom - 0.5;
+
+      if (covers && (hasColor || hasImage)) {
+        const layer = document.createElement('div');
+        layer.style.position = 'absolute';
+        layer.style.left = `${rect.left - sourceRect.left}px`;
+        layer.style.top = `${rect.top - sourceRect.top}px`;
+        layer.style.width = `${rect.width}px`;
+        layer.style.height = `${rect.height}px`;
+        if (hasColor) layer.style.backgroundColor = color;
+        if (hasImage) {
+          layer.style.backgroundImage = image;
+          layer.style.backgroundSize = computed.backgroundSize;
+          layer.style.backgroundPosition = computed.backgroundPosition;
+          layer.style.backgroundRepeat = computed.backgroundRepeat;
+          layer.style.backgroundOrigin = computed.backgroundOrigin;
+          layer.style.backgroundClip = computed.backgroundClip;
+        }
+        // Nearest ancestor must paint above farther ones.
+        layers.unshift(layer);
+        if (fullyCovers) opaque = alpha !== null && alpha >= 0.999;
+      }
+    }
+
+    if (node === document.documentElement) break;
+    node = parentAcrossShadow(node);
+  }
+
+  if (!opaque) {
+    const canvas = document.createElement('div');
+    canvas.style.cssText = 'position:absolute;inset:0;';
+    canvas.style.backgroundColor = pageCanvasColor();
+    layers.unshift(canvas);
+  }
+
+  if (layers.length === 0) return null;
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'preview-backdrop';
+  backdrop.setAttribute('aria-hidden', 'true');
+  backdrop.style.width = `${width}px`;
+  backdrop.style.height = `${height}px`;
+  // Clip to the element's curve so a parent fill doesn't square off the corners.
+  backdrop.style.borderRadius = window.getComputedStyle(source).borderRadius;
+  for (const layer of layers) backdrop.append(layer);
+  return backdrop;
+}
+
+/** Parent element, stepping out of a shadow root onto its host. */
+function parentAcrossShadow(node: Element): Element | null {
+  if (node.parentElement) return node.parentElement;
+  const root = node.getRootNode();
+  return root instanceof ShadowRoot ? root.host : null;
+}
+
+/** Alpha of a computed color, or null when the syntax isn't recognized. */
+function colorAlpha(color: string): number | null {
+  const value = color.trim().toLowerCase();
+  if (!value || value === 'transparent') return 0;
+
+  const slash = value.match(/\/\s*([0-9.]+)(%?)\s*\)\s*$/);
+  if (slash) {
+    const n = Number(slash[1]);
+    if (!Number.isFinite(n)) return null;
+    return slash[2] ? n / 100 : n;
+  }
+
+  const comma = value.match(/^(?:rgba|hsla)\([^)]+,\s*([0-9.]+)\s*\)$/);
+  if (comma) {
+    const n = Number(comma[1]);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  if (/^(?:rgb|hsl|hwb|lab|lch|oklab|oklch|color)\(/.test(value)) return 1;
+  if (value.startsWith('#')) {
+    const hex = value.slice(1);
+    if (hex.length === 4 || hex.length === 8) {
+      const a = Number.parseInt(hex.slice(-2), 16);
+      return Number.isFinite(a) ? a / 255 : null;
+    }
+    return 1;
+  }
+  return null;
+}
+
+/** Resolved `canvas` color of the page, not the shadow root's light scheme. */
+function pageCanvasColor(): string {
+  const probe = document.createElement('div');
+  probe.setAttribute('data-agentgrab', '');
+  probe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;pointer-events:none;background-color:canvas;';
+  document.documentElement.append(probe);
+  try {
+    return window.getComputedStyle(probe).backgroundColor || '#fff';
+  } finally {
+    probe.remove();
   }
 }
 
